@@ -1,11 +1,13 @@
 ARCH=86
 NVCC=nvcc -O3 -Xcompiler=-ffast-math
-CLANG=clang++-19
+LIBRARY_PATH=/usr/lib/llvm-19/lib
+CLANG=LIBRARY_PATH=$(LIBRARY_PATH) clang++-19 -O3 -ffast-math
 
-all: matmul.nvcc matmul.nvcc_lto matmul.clang
+all: matmul.nvcc matmul.nvcc_lto matmul.openmp_target
+#matmul.clang
 
 #
-# Basic separable compilation:
+# Basic CUDA separable compilation:
 # matrix multiply kernel and dot product function are compiled separately
 # The generated GPU code explicitly contains dotProduct function, which is
 # called from the matrix multiply kernel
@@ -44,7 +46,7 @@ matmul.nvcc_lto: matmul.nvcc_lto.o dot_product.nvcc_lto.o
 	mv $@_check $@
 
 #
-# CUDA code compilation with Clang
+# Basic CUDA separable compilation with Clang
 #
 
 matmul.clang.o: matmul.cu
@@ -54,12 +56,26 @@ dot_product.clang.o: dot_product.cu
 	$(CLANG) --cuda-gpu-arch=sm_$(ARCH) -fcuda-rdc -c $< -o $@
 
 matmul.clang: matmul.clang.o dot_product.clang.o
-	$(CLANG) --cuda-gpu-arch=sm_$(ARCH) -fcuda-rdc $^ -o $@_check -L/usr/local/cuda/lib64 -lcudart_static -lcudadevrt && \
+	$(CLANG) -foffload-lto --cuda-gpu-arch=sm_$(ARCH) -fcuda-rdc $^ -o $@_check -L/usr/local/cuda/lib64 -lcudart -lcudadevrt && \
 	cuobjdump -sass $@_check | grep dotProduct && \
 	cuobjdump -sass $@_check | grep CALL && \
 	mv $@_check $@
+
+#
+# Equivalent OpenMP target offload version targeting NVPTX
+#
+
+matmul.openmp_target.o: matmul.cpp
+	$(CLANG) -fopenmp -fopenmp-targets=nvptx64-nvidia-cuda -Xopenmp-target=nvptx64-nvidia-cuda --offload-target=sm_$(ARCH) -foffload-lto -c $< -o $@
+
+dot_product.openmp_target.o: dot_product.cpp
+	$(CLANG) -fopenmp -fopenmp-targets=nvptx64-nvidia-cuda -Xopenmp-target=nvptx64-nvidia-cuda --offload-target=sm_$(ARCH) -foffload-lto -c $< -o $@
+
+matmul.openmp_target: matmul.openmp_target.o dot_product.openmp_target.o 
+	$(CLANG) -fopenmp -fopenmp-targets=nvptx64-nvidia-cuda -Xopenmp-target=nvptx64-nvidia-cuda --offload-target=sm_$(ARCH) -foffload-lto $^ -o $@ -Wl,-rpath=$(LIBRARY_PATH)
 
 clean:
 	rm -rf matmul.nvcc.o dot_product.nvcc.o matmul.nvcc_check matmul.nvcc
 	rm -rf matmul.nvcc_lto.o dot_product.nvcc_lto.o matmul.nvcc_lto_check matmul.nvcc_lto
 	rm -rf matmul.clang.o dot_product.clang.o matmul.clang_check matmul.clang
+	rm -rf matmul.openmp_target.o dot_product.openmp_target.o matmul.openmp_target_check matmul.openmp_target
