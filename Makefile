@@ -3,7 +3,7 @@ NVCC=nvcc -O3 -Xcompiler=-ffast-math
 LIBRARY_PATH=/usr/lib/llvm-19/lib
 CLANG=LIBRARY_PATH=$(LIBRARY_PATH) clang++-19 -O3 -ffast-math
 
-all: matmul.nvcc matmul.nvcc_lto matmul.openmp_target
+all: matmul.nvcc matmul.nvcc_lto matmul.nvcc_lto_arch matmul.openmp_target
 #matmul.clang
 
 #
@@ -46,7 +46,24 @@ matmul.nvcc_lto: matmul.nvcc_lto.o dot_product.nvcc_lto.o
 	mv $@_check $@
 
 #
-# Basic CUDA separable compilation with Clang
+# Another way of enabling CUDA device-side LTO:
+# lto_$(ARCH) instead of sm_$(ARCH)
+#
+
+matmul.nvcc_lto_arch.o: matmul.cu
+	$(NVCC) -arch=lto_$(ARCH) -rdc=true -c $< -o $@
+
+dot_product.nvcc_lto_arch.o: dot_product.cu
+	$(NVCC) -arch=lto_$(ARCH) -rdc=true -c $< -o $@
+
+matmul.nvcc_lto_arch: matmul.nvcc_lto_arch.o dot_product.nvcc_lto_arch.o
+	$(NVCC) -arch=sm_$(ARCH) -dlto $^ -o $@_check && \
+	cuobjdump -sass $@_check | grep dotProduct | wc -l | awk '{exit $$1}' && \
+	cuobjdump -sass $@_check | grep CALL | wc -l | awk '{exit $$1}' && \
+	mv $@_check $@
+
+#
+# Basic CUDA separable compilation with Clang (DOES NOT WORK)
 #
 
 matmul.clang.o: matmul.cu
@@ -77,5 +94,6 @@ matmul.openmp_target: matmul.openmp_target.o dot_product.openmp_target.o
 clean:
 	rm -rf matmul.nvcc.o dot_product.nvcc.o matmul.nvcc_check matmul.nvcc
 	rm -rf matmul.nvcc_lto.o dot_product.nvcc_lto.o matmul.nvcc_lto_check matmul.nvcc_lto
+	rm -rf matmul.nvcc_lto_arch.o dot_product.nvcc_lto_arch.o matmul.nvcc_lto_arch_check matmul.nvcc_lto_arch
 	rm -rf matmul.clang.o dot_product.clang.o matmul.clang_check matmul.clang
 	rm -rf matmul.openmp_target.o dot_product.openmp_target.o matmul.openmp_target_check matmul.openmp_target
